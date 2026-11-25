@@ -97,6 +97,11 @@ import UniformTypeIdentifiers
     #expect(cache.cached(plain, maxPixels: 400) == nil && cache.cached(trimmed, maxPixels: 400) == nil)
 }
 
+@Test func aTrailingClosureIsTheLongestSideForm() {
+    let source = PictureSource(id: "x") { side in side == 512 ? Samples.photo(width: 8, height: 8) : nil }
+    #expect(source.decode(.filling(width: 512, height: 100)) != nil)
+}
+
 @Test func fillingTargetsAreCachedApart() async throws {
     let file = Samples.folder().appending(path: "wide.png")
     try Samples.encode(Samples.photo(width: 2500, height: 1000), .png).write(to: file)

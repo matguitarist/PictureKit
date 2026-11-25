@@ -46,7 +46,9 @@ public struct PictureSource: Sendable, Hashable {
         self.init(id: id, baseID: id, target: { decode($0.longSide) })
     }
 
-    /// A source that handles both targets itself, such as with `Pictures.thumbnail(_:filling:_:)`.
+    /// A source that handles both targets itself, such as with `Pictures.thumbnail(_:filling:_:)`. Write the
+    /// `decodeTarget:` label: a bare trailing closure goes to the longest-side form.
+    @_disfavoredOverload
     public init(id: String, decodeTarget: @escaping @Sendable (PictureTarget) -> CGImage?) {
         self.init(id: id, baseID: id, target: decodeTarget)
     }
