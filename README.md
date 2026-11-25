@@ -16,7 +16,7 @@ macOS 14 or iOS 17 or later.
 SwiftPM (`Package.swift`):
 
 ```swift
-.package(url: "https://github.com/matguitarist/PictureKit", from: "0.1.0"),
+.package(url: "https://github.com/matguitarist/PictureKit", from: "0.2.0"),
 // in the app target:
 .product(name: "PictureKitUI", package: "PictureKit"),
 // in a Kit target with no SwiftUI:
@@ -29,7 +29,7 @@ XcodeGen (`project.yml`):
 packages:
   PictureKit:
     url: https://github.com/matguitarist/PictureKit
-    from: 0.1.0
+    from: 0.2.0
 targets:
   App:
     dependencies:
@@ -45,8 +45,12 @@ targets:
 | `.artwork` | box art, logos, fan art | HEIC | full size | 80% | yes |
 | `.cover` | a cover in a grid and an inspector | HEIC | 1200 px | 80% | yes |
 
-Make your own with `PictureStyle(format:longSide:quality:onlyWhenSmaller:)`. Every style turns pictures upright and
-never compresses a picture twice: one already in the style comes back unchanged.
+Make your own with `PictureStyle(format:longSide:quality:onlyWhenSmaller:)`, or change one side:
+`.artwork.withLongSide(1920)`, `.photo.withLongSide(400)` for a preview. Every style turns pictures upright and never
+compresses a picture twice: one already in the style comes back unchanged. An animated GIF or PNG comes back unchanged
+too (`Pictures.isAnimated`), since converting keeps one frame.
+
+A picture already decoded, from the camera or the pasteboard: `Pictures.convert(cgImage, orientation: 6, to: .photo)`.
 
 ## Store a picture
 
@@ -76,6 +80,16 @@ for pdf in manuals where ScannedPDF.isWorthShrinking(pdf) {
 }
 ```
 
+A PDF with text in it (fonts on a page: a schematic, a datasheet, a scan with a searchable text layer) is never worth
+shrinking unless you pass `allowText: true`: redrawn as pictures, its text couldn't be searched. A file that can't be
+read or didn't get smaller is marked, so it isn't tried again.
+
+After a file is replaced, `URL.resourceValues` on a URL you held may still give the old size: read it from a fresh
+`URL` or `FileManager.attributesOfItem`.
+
+Other checks: `Pictures.isBlank(data)` (every pixel clear), `Pictures.info(data)` (size, type, orientation, alpha,
+without decoding).
+
 ## Show a picture
 
 ```swift
@@ -93,6 +107,27 @@ AsyncPicture(.data(id: "\(archive.path)#\(path)") { try picture.data() }, maxPix
 AsyncPicture(.file(screenshot).applying("trimmed") { $0.trimmingDarkBorders() }, contentMode: .fill)
 ```
 
-The size decoded is the view's longest side times the screen scale, in steps of 256 px. A picture already decoded
-shows on the first frame. When a file is replaced at the same path, call `PictureCache.shared.forget(.file(url))`
-and every view showing it loads it again.
+The size decoded comes from the view's size times the screen scale, in steps of 256 px. With `.fill`, the picture
+is decoded just big enough to cover the view once cropped, so a wide picture in a square tile stays sharp. A picture
+already decoded shows on the first frame.
+
+```swift
+// Placed at the bottom, like a box on a shelf; a different view when there's no picture.
+AsyncPicture(.file(box), alignment: .bottom) {
+    ProgressView()
+} missing: {
+    Image(systemName: "photo")
+}
+
+// Before a snapshot, or the first screen of a grid:
+await PictureCache.shared.prefetch(sources, .longSide(512))
+```
+
+When a file is replaced at the same path, call `PictureCache.shared.forget(.file(url))`: it forgets every size and
+every picture made from it with `applying`, and every view showing them loads them again.
+
+## Testing pictures in an app
+
+Draw samples in code rather than keeping fixture files. To make a photo "taken sideways", pass the orientation as a
+typed `[CFString: Any]` (`[kCGImagePropertyOrientation: 6]`) to `CGImageDestinationAddImage`: a plain dictionary
+literal cast to `CFDictionary` can drop it silently.

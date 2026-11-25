@@ -36,8 +36,9 @@ public enum PictureFile {
     public static func find(base: URL) -> URL? { existing(base: base).first }
 
     /// Writes `data` as `base` plus the extension its format takes, converted to `style` (nil writes it as it is).
-    /// An earlier picture at `base` in another format goes per `replaced`. The folder is made when missing. Throws when
-    /// `data` isn't a picture: nothing is written then.
+    /// An earlier picture at `base`, in any format, goes per `replaced` (`.keep` keeps those in another format and
+    /// overwrites one in the same format). The folder is made when missing. Throws when `data` isn't a picture:
+    /// nothing is written or removed then.
     @discardableResult
     public static func store(_ data: Data, at base: URL, style: PictureStyle?, replaced: Disposal = .trash) throws -> URL {
         let picture: ConvertedPicture
@@ -49,8 +50,8 @@ public enum PictureFile {
         }
         try FileManager.default.createDirectory(at: base.deletingLastPathComponent(), withIntermediateDirectories: true)
         let destination = base.appendingPathExtension(picture.fileExtension)
+        for old in existing(base: base) where old.pathExtension != destination.pathExtension || replaced == .trash { replaced.apply(to: old) }
         try picture.data.write(to: destination, options: .atomic)
-        for old in existing(base: base) where old.pathExtension != destination.pathExtension { replaced.apply(to: old) }
         return destination
     }
 
@@ -78,11 +79,12 @@ public enum PictureFile {
     }
 
     /// Rewrites a picture file in `style` beside it, then disposes of the original. Returns the new file, or nil when
-    /// it was left as it was; a file converting doesn't make smaller is marked so it isn't tried again.
+    /// it was left as it was; a file converting doesn't make smaller, or that can't be read, is marked so it isn't
+    /// tried again.
     @discardableResult
     public static func compress(_ url: URL, to style: PictureStyle, original: Disposal = .trash) -> URL? {
-        guard let data = try? Data(contentsOf: url), let picture = try? Pictures.convert(data, to: style) else { return nil }
-        guard picture.converted else {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        guard let picture = try? Pictures.convert(data, to: style), picture.converted else {
             mark(url)
             return nil
         }

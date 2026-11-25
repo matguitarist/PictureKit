@@ -70,6 +70,11 @@ public enum Pictures {
                            hasAlpha: properties[kCGImagePropertyHasAlpha] as? Bool ?? false)
     }
 
+    /// Whether a picture has several frames: an animated GIF, PNG or HEIC sequence. `convert` keeps those as they are.
+    public static func isAnimated(_ data: Data) -> Bool {
+        CGImageSourceCreateWithData(data as CFData, nil).map { CGImageSourceGetCount($0) > 1 } ?? false
+    }
+
     // MARK: Thumbnails
 
     /// The picture decoded at most `maxPixels` on its longest side, turned upright. Nil when it can't be read.
@@ -81,6 +86,48 @@ public enum Pictures {
     public static func thumbnail(of data: Data, maxPixels: Int) -> CGImage? {
         CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary)
             .flatMap { thumbnail($0, maxPixels: maxPixels) }
+    }
+
+    /// The picture decoded just big enough to fill `width` × `height` pixels when cropped, as a cell drawn with
+    /// `.fill` needs: a wide picture in a square tile is decoded by its short side, so the crop stays sharp.
+    public static func thumbnail(at url: URL, filling width: Int, _ height: Int) -> CGImage? {
+        CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary)
+            .flatMap { thumbnail($0, filling: width, height) }
+    }
+
+    public static func thumbnail(of data: Data, filling width: Int, _ height: Int) -> CGImage? {
+        CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary)
+            .flatMap { thumbnail($0, filling: width, height) }
+    }
+
+    public static func thumbnail(_ source: CGImageSource, filling width: Int, _ height: Int) -> CGImage? {
+        guard let info = info(source) else { return nil }
+        // Upright size: EXIF 5 to 8 swap the sides.
+        let (w, h) = info.orientation >= 5 ? (info.height, info.width) : (info.width, info.height)
+        let scale = min(1, max(Double(width) / Double(w), Double(height) / Double(h)))
+        return thumbnail(source, maxPixels: Int((Double(max(w, h)) * scale).rounded(.up)))
+    }
+
+    /// Whether a picture is empty: every pixel clear (a logo that failed to render, an empty frame). Nil when it
+    /// can't be read.
+    public static func isBlank(_ data: Data) -> Bool? {
+        thumbnail(of: data, maxPixels: 64).map(isBlank)
+    }
+
+    public static func isBlank(at url: URL) -> Bool? {
+        thumbnail(at: url, maxPixels: 64).map(isBlank)
+    }
+
+    static func isBlank(_ image: CGImage) -> Bool {
+        let (w, h) = (image.width, image.height)
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4, space: space,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let data = context.data else { return false }
+        context.clear(CGRect(x: 0, y: 0, width: w, height: h))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        let pixels = data.bindMemory(to: UInt8.self, capacity: w * h * 4)
+        return !(0..<(w * h)).contains { pixels[$0 * 4 + 3] > 8 }
     }
 
     public static func thumbnail(_ source: CGImageSource, maxPixels: Int) -> CGImage? {
@@ -105,6 +152,8 @@ public enum Pictures {
         let original = ConvertedPicture(data: data, width: info.width, height: info.height,
                                         type: info.type ?? style.format.type, converted: false)
         if fits, isAlready(info, data: data, in: style) { return original }
+        // Converting keeps one frame: a moving GIF or PNG stays as it is.
+        if CGImageSourceGetCount(source) > 1 { return original }
 
         let side = min(style.longSide ?? info.longSide, info.longSide)
         guard let decoded = thumbnail(source, maxPixels: side), let image = inColor(decoded),
@@ -119,6 +168,21 @@ public enum Pictures {
         guard style.format.isLossy else { return true }
         // A compressed photo is well under a byte a pixel; a HEIC saved at full quality isn't.
         return Double(data.count) <= Double(info.width * info.height) * 0.5
+    }
+
+    /// A picture already decoded (from the camera, the pasteboard, a drawing) in `style`. `orientation` is its EXIF
+    /// orientation, 1 when it's upright already: a camera's picture is often stored sideways.
+    public static func convert(_ image: CGImage, orientation: Int = 1, to style: PictureStyle) throws -> ConvertedPicture {
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(output as CFMutableData, UTType.tiff.identifier as CFString, 1, nil) else {
+            throw PictureError.unreadable
+        }
+        CGImageDestinationAddImage(destination, image, [kCGImagePropertyOrientation: orientation] as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else { throw PictureError.unreadable }
+        var forced = style
+        // A TIFF is never the smaller one to keep.
+        forced.onlyWhenSmaller = false
+        return try convert(output as Data, to: forced)
     }
 
     /// Encodes a decoded picture. Nil when ImageIO can't write it.

@@ -7,19 +7,26 @@ import SwiftUI
 ///     AsyncPicture(.file(coverURL), contentMode: .fill) {
 ///         Text(game.title.prefix(1))
 ///     }
-public struct AsyncPicture<Placeholder: View>: View {
+///
+/// With `.fill`, the picture is decoded just big enough to cover the view when cropped, so a wide picture in a
+/// square tile stays sharp. `missing` shows when the picture can't be read, apart from the placeholder shown while
+/// it loads.
+public struct AsyncPicture<Placeholder: View, Missing: View>: View {
     private let source: PictureSource?
     private let contentMode: ContentMode
+    private let alignment: Alignment
     private let maxPixels: Int?
     private let cache: PictureCache
     private let placeholder: Placeholder
+    private let missing: Missing
 
     @Environment(\.displayScale) private var displayScale
     @State private var loaded: Loaded?
+    @State private var failed: Request?
 
     private struct Request: Hashable {
         var source: PictureSource
-        var pixels: Int
+        var target: PictureTarget
         var revision: Int
     }
 
@@ -28,54 +35,74 @@ public struct AsyncPicture<Placeholder: View>: View {
         var image: CGImage
     }
 
-    /// `maxPixels` fixes the decoded size; without it, the view's longest side times the screen's scale.
-    public init(_ source: PictureSource?, contentMode: ContentMode = .fit, maxPixels: Int? = nil,
-                cache: PictureCache = .shared, @ViewBuilder placeholder: () -> Placeholder) {
+    /// `maxPixels` fixes the decoded longest side; without it, the size comes from the view's size and the screen's
+    /// scale. `alignment` places a picture that doesn't fill the view, such as a box on a shelf with `.bottom`.
+    public init(_ source: PictureSource?, contentMode: ContentMode = .fit, alignment: Alignment = .center,
+                maxPixels: Int? = nil, cache: PictureCache = .shared,
+                @ViewBuilder placeholder: () -> Placeholder, @ViewBuilder missing: () -> Missing) {
         self.source = source
         self.contentMode = contentMode
+        self.alignment = alignment
         self.maxPixels = maxPixels
         self.cache = cache
         self.placeholder = placeholder()
+        self.missing = missing()
     }
 
     public var body: some View {
         GeometryReader { proxy in
-            let request = source.map {
-                Request(source: $0,
-                        pixels: PictureCache.step(maxPixels ?? Int((max(proxy.size.width, proxy.size.height) * displayScale).rounded(.up))),
-                        revision: PictureRevisions.shared.revision(of: $0.id))
-            }
+            let request = source.map { Request(source: $0, target: target(for: proxy.size), revision: PictureRevisions.shared.revision(of: $0.id)) }
             Group {
                 if let request, let image = image(for: request) {
                     Image(decorative: image, scale: 1)
                         .resizable()
                         .aspectRatio(contentMode: contentMode)
-                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .frame(width: proxy.size.width, height: proxy.size.height, alignment: alignment)
                         .clipped()
+                } else if source == nil || (request != nil && failed == request) {
+                    missing.frame(width: proxy.size.width, height: proxy.size.height)
                 } else {
-                    placeholder
-                        .frame(width: proxy.size.width, height: proxy.size.height)
+                    placeholder.frame(width: proxy.size.width, height: proxy.size.height)
                 }
             }
             .task(id: request) {
-                guard let request, request.pixels > 0, image(for: request) == nil else { return }
-                if let image = await cache.image(request.source, maxPixels: request.pixels), !Task.isCancelled {
-                    loaded = Loaded(request: request, image: image)
-                }
+                guard let request, request.target.longSide > 0, image(for: request) == nil else { return }
+                let image = await cache.image(request.source, request.target)
+                guard !Task.isCancelled else { return }
+                if let image { loaded = Loaded(request: request, image: image) } else { failed = request }
             }
         }
+    }
+
+    private func target(for size: CGSize) -> PictureTarget {
+        if let maxPixels { return .longSide(maxPixels) }
+        let (width, height) = (Int((size.width * displayScale).rounded(.up)), Int((size.height * displayScale).rounded(.up)))
+        return contentMode == .fill ? .filling(width: width, height: height) : .longSide(max(width, height))
     }
 
     /// This view's own load for this request, else what the cache has: never the previous picture of a reused cell.
     private func image(for request: Request) -> CGImage? {
         if let loaded, loaded.request == request { return loaded.image }
-        return cache.cached(request.source, maxPixels: request.pixels)
+        return cache.cached(request.source, request.target)
     }
 }
 
-extension AsyncPicture where Placeholder == Color {
+extension AsyncPicture where Missing == Placeholder {
+    /// The same view while loading and when there's no picture.
+    public init(_ source: PictureSource?, contentMode: ContentMode = .fit, alignment: Alignment = .center,
+                maxPixels: Int? = nil, cache: PictureCache = .shared, @ViewBuilder placeholder: () -> Placeholder) {
+        let view = placeholder()
+        self.init(source, contentMode: contentMode, alignment: alignment, maxPixels: maxPixels, cache: cache,
+                  placeholder: { view }, missing: { view })
+    }
+}
+
+extension AsyncPicture where Placeholder == Color, Missing == Color {
     /// With a plain gray placeholder.
-    public init(_ source: PictureSource?, contentMode: ContentMode = .fit, maxPixels: Int? = nil, cache: PictureCache = .shared) {
-        self.init(source, contentMode: contentMode, maxPixels: maxPixels, cache: cache) { Color.secondary.opacity(0.15) }
+    public init(_ source: PictureSource?, contentMode: ContentMode = .fit, alignment: Alignment = .center,
+                maxPixels: Int? = nil, cache: PictureCache = .shared) {
+        self.init(source, contentMode: contentMode, alignment: alignment, maxPixels: maxPixels, cache: cache) {
+            Color.secondary.opacity(0.15)
+        }
     }
 }

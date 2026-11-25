@@ -41,6 +41,13 @@ public struct PictureStyle: Sendable, Hashable {
         self.onlyWhenSmaller = onlyWhenSmaller
     }
 
+    /// The same style with another longest side: `.artwork.withLongSide(1920)`, `.photo.withLongSide(400)` for a preview.
+    public func withLongSide(_ side: Int?) -> PictureStyle {
+        var style = self
+        style.longSide = side
+        return style
+    }
+
     /// Photos and screenshots people add (Thimble's pictures, BenchLog's repair photos): HEIC at 60%, at most
     /// 1600 px, turned upright. Readable on screen and by a model, a few hundred KB at most.
     public static let photo = PictureStyle(format: .heic, longSide: 1600, quality: 0.6, onlyWhenSmaller: false)

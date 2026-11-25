@@ -13,14 +13,36 @@ public enum ScannedPDF {
     /// Scans heavier than this per page are worth redoing: a cartridge-era manual is 50–80 KB a page.
     public static let heavyBytesPerPage = 150_000
 
-    /// Whether a PDF is a heavy scan not tried yet. `alsoChecked` and `alsoCreators` take an app's own older marks.
-    public static func isWorthShrinking(_ url: URL, alsoChecked: [String] = [], alsoCreators: [String] = []) -> Bool {
+    /// Whether a PDF is a heavy scan not tried yet. A PDF with text in it (fonts on any page: a schematic, a datasheet,
+    /// a scan with a searchable text layer) isn't, since redrawing it as pictures would lose that text; pass
+    /// `allowText` to shrink those too. `alsoChecked` and `alsoCreators` take an app's own older marks.
+    public static func isWorthShrinking(_ url: URL, allowText: Bool = false, alsoChecked: [String] = [], alsoCreators: [String] = []) -> Bool {
         guard url.pathExtension.lowercased() == "pdf",
               !([checkedAttribute] + alsoChecked).contains(where: { PictureFile.hasAttribute($0, url) }),
               let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
               let document = CGPDFDocument(url as CFURL), document.numberOfPages > 0,
-              !([creator] + alsoCreators).contains(Self.creator(of: document) ?? "") else { return false }
-        return size / document.numberOfPages > heavyBytesPerPage
+              !([creator] + alsoCreators).contains(Self.creator(of: document) ?? ""),
+              size / document.numberOfPages > heavyBytesPerPage else { return false }
+        return allowText || !hasText(document)
+    }
+
+    /// Whether any page uses a font, the sign of text a reader can select and search.
+    public static func hasText(_ url: URL) -> Bool {
+        CGPDFDocument(url as CFURL).map(hasText) ?? false
+    }
+
+    static func hasText(_ document: CGPDFDocument) -> Bool {
+        guard document.numberOfPages > 0 else { return false }
+        for number in 1...document.numberOfPages {
+            guard let dictionary = document.page(at: number)?.dictionary else { continue }
+            var resources: CGPDFDictionaryRef?
+            var fonts: CGPDFDictionaryRef?
+            if CGPDFDictionaryGetDictionary(dictionary, "Resources", &resources), let resources,
+               CGPDFDictionaryGetDictionary(resources, "Font", &fonts), let fonts, CGPDFDictionaryGetCount(fonts) > 0 {
+                return true
+            }
+        }
+        return false
     }
 
     /// Redraws each page at `dpi` as a JPEG. The new file replaces the old one (which goes per `original`) only when
